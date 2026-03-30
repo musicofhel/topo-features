@@ -1,0 +1,1238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>TopoFeatures Explainer</title>
+<style>
+  * { margin: 0; padding: 0; }
+  body { background: #1a1a2e; overflow: hidden; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+"use strict";
+
+// ── Constants ──────────────────────────────────────────────────────────
+const WIDTH = 1920, HEIGHT = 1080;
+const FPS = 60;
+const TOTAL_FRAMES = 10800;
+
+const TEAL      = 0x58c4dd;
+const YELLOW_C  = 0xffff00;
+const CORAL     = 0xff6b6b;
+const SOFT_WHITE= 0xe0e0e0;
+const DIM_GRAY  = 0x666666;
+const BG_COLOR  = 0x1a1a2e;
+const CODE_BG   = '#0d1117';
+
+const TEAL_S      = '#58c4dd';
+const YELLOW_S    = '#ffff00';
+const CORAL_S     = '#ff6b6b';
+const SOFT_WHITE_S= '#e0e0e0';
+const DIM_GRAY_S  = '#666666';
+
+// ── PRNG (mulberry32) ─────────────────────────────────────────────────
+function mulberry32(a) {
+    return function() {
+        a |= 0; a = a + 0x6D2B79F5 | 0;
+        var t = Math.imul(a ^ a >>> 15, 1 | a);
+        t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+        return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+}
+const rng = mulberry32(42);
+
+// ── Easing / Lerp ─────────────────────────────────────────────────────
+function ease(t) {
+    t = Math.max(0, Math.min(1, t));
+    return t < 0.5 ? 2*t*t : -1+(4-2*t)*t;
+}
+function lerp(a, b, t) { return a + (b - a) * Math.max(0, Math.min(1, t)); }
+function fp(frame, start, end) { return (frame - start) / (end - start); }
+
+// ── Renderer + Scene + Camera ─────────────────────────────────────────
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+renderer.setSize(WIDTH, HEIGHT);
+renderer.setPixelRatio(1);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.2;
+renderer.setClearColor(BG_COLOR);
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(BG_COLOR);
+
+const camera = new THREE.PerspectiveCamera(50, WIDTH / HEIGHT, 0.1, 1000);
+camera.position.set(0, 0, 8);
+
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+const pointLight = new THREE.PointLight(0xffffff, 0.8);
+pointLight.position.set(5, 5, 5);
+scene.add(ambientLight, pointLight);
+
+// ── Text Texture Helper ───────────────────────────────────────────────
+function createTextCanvas(text, opts) {
+    const o = Object.assign({
+        fontSize: 48, color: SOFT_WHITE_S, bgColor: null,
+        width: 1024, height: 128, font: '"Segoe UI", Arial, sans-serif',
+        align: 'center', baseline: 'middle', bold: false,
+        multiline: false, lineHeight: 1.4
+    }, opts);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = o.width;
+    canvas.height = o.height;
+    const ctx = canvas.getContext('2d');
+
+    if (o.bgColor) {
+        ctx.fillStyle = o.bgColor;
+        roundRect(ctx, 0, 0, o.width, o.height, 12);
+        ctx.fill();
+    }
+
+    const weight = o.bold ? 'bold ' : '';
+    ctx.font = `${weight}${o.fontSize}px ${o.font}`;
+    ctx.fillStyle = o.color;
+    ctx.textAlign = o.align;
+    ctx.textBaseline = o.baseline;
+
+    if (o.multiline) {
+        const lines = text.split('\n');
+        const lh = o.fontSize * o.lineHeight;
+        const startY = o.height / 2 - (lines.length - 1) * lh / 2;
+        for (let i = 0; i < lines.length; i++) {
+            ctx.fillText(lines[i], o.width / 2, startY + i * lh);
+        }
+    } else {
+        ctx.fillText(text, o.width / 2, o.height / 2);
+    }
+
+    return canvas;
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y - r + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+}
+
+function makeTextSprite(text, opts) {
+    const canvas = createTextCanvas(text, opts);
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.minFilter = THREE.LinearFilter;
+    const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: 0 });
+    const sprite = new THREE.Sprite(mat);
+    const aspect = canvas.width / canvas.height;
+    const scale = (opts && opts.scale) || 3;
+    sprite.scale.set(scale * aspect, scale, 1);
+    sprite.visible = false;
+    return sprite;
+}
+
+function makeCodeCanvas(lines, opts) {
+    const o = Object.assign({ fontSize: 28, width: 800, lineHeight: 1.6, pad: 30 }, opts);
+    const h = o.pad * 2 + lines.length * o.fontSize * o.lineHeight;
+    const canvas = document.createElement('canvas');
+    canvas.width = o.width;
+    canvas.height = Math.ceil(h);
+    const ctx = canvas.getContext('2d');
+
+    ctx.fillStyle = CODE_BG;
+    roundRect(ctx, 0, 0, canvas.width, canvas.height, 16);
+    ctx.fill();
+
+    ctx.font = `${o.fontSize}px "Consolas", "Courier New", monospace`;
+    ctx.textBaseline = 'top';
+
+    for (let i = 0; i < lines.length; i++) {
+        const y = o.pad + i * o.fontSize * o.lineHeight;
+        const segs = lines[i]; // array of {text, color}
+        let x = o.pad;
+        for (const seg of segs) {
+            ctx.fillStyle = seg.color || SOFT_WHITE_S;
+            ctx.fillText(seg.text, x, y);
+            x += ctx.measureText(seg.text).width;
+        }
+    }
+
+    return canvas;
+}
+
+function makeCodeSprite(lines, opts) {
+    const canvas = makeCodeCanvas(lines, opts);
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.minFilter = THREE.LinearFilter;
+    const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: 0 });
+    const sprite = new THREE.Sprite(mat);
+    const aspect = canvas.width / canvas.height;
+    const scale = (opts && opts.scale) || 4;
+    sprite.scale.set(scale * aspect, scale, 1);
+    sprite.visible = false;
+    return sprite;
+}
+
+// ── Camera keyframes ──────────────────────────────────────────────────
+const camKeys = [
+    { frame: 0,     pos: [0, 0, 8],    target: [0, 0, 0] },
+    { frame: 900,   pos: [0, 0, 8],    target: [0, 0, 0] },
+    { frame: 1500,  pos: [3, 2, 6],    target: [0, 0, 0] },
+    { frame: 2099,  pos: [3, 2, 6],    target: [0, 0, 0] },
+    { frame: 2100,  pos: [0, 0, 7],    target: [0, 0, 0] },
+    { frame: 2760,  pos: [0, 0, 7],    target: [0, 0, 0] },
+    { frame: 3480,  pos: [0, 0.5, 7],  target: [0, 0, 0] },
+    { frame: 3899,  pos: [0, 0, 6],    target: [0, 0, 0] },
+    { frame: 3900,  pos: [0, 0, 6],    target: [0, 0, 0] },
+    { frame: 4920,  pos: [0, 0, 7],    target: [0, 0, 0] },
+    // Loop orbit: camera orbits 180 degrees
+    { frame: 5880,  pos: [0, 0, -7],   target: [0, 0, 0] },
+    { frame: 6420,  pos: [0, 0, 7],    target: [0, 0, 0] },
+    { frame: 6899,  pos: [0, 0, 7],    target: [0, 0, 0] },
+    // Act 4: orthographic-like
+    { frame: 6900,  pos: [0, 0, 8],    target: [0, 0, 0] },
+    { frame: 8699,  pos: [0, 0, 8],    target: [0, 0, 0] },
+    // Act 5
+    { frame: 8700,  pos: [0, 0, 8],    target: [0, 0, 0] },
+    { frame: 10079, pos: [0, 0, 8],    target: [0, 0, 0] },
+    // Act 6
+    { frame: 10080, pos: [0, 0, 8],    target: [0, 0, 0] },
+    { frame: 10799, pos: [0, 0, 8],    target: [0, 0, 0] },
+];
+
+function updateCamera(frame) {
+    let a = camKeys[0], b = camKeys[camKeys.length - 1];
+    for (let i = 0; i < camKeys.length - 1; i++) {
+        if (frame >= camKeys[i].frame && frame <= camKeys[i+1].frame) {
+            a = camKeys[i]; b = camKeys[i+1];
+            break;
+        }
+    }
+    const t = (b.frame === a.frame) ? 1 : ease(fp(frame, a.frame, b.frame));
+    camera.position.set(
+        lerp(a.pos[0], b.pos[0], t),
+        lerp(a.pos[1], b.pos[1], t),
+        lerp(a.pos[2], b.pos[2], t)
+    );
+    camera.lookAt(
+        lerp(a.target[0], b.target[0], t),
+        lerp(a.target[1], b.target[1], t),
+        lerp(a.target[2], b.target[2], t)
+    );
+
+    // Subtle orbit for scenes that hold still
+    const orbitSpeed = 0.0005;
+    const angle = frame * orbitSpeed;
+    const r = camera.position.length();
+    if (frame >= 3900 && frame <= 6899) {
+        // Act 3: more dramatic orbit during the loop moment
+    } else if (frame < 6900) {
+        camera.position.x += Math.sin(angle) * 0.15;
+        camera.position.y += Math.cos(angle * 0.7) * 0.08;
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// PRE-ALLOCATE ALL SCENE OBJECTS
+// ══════════════════════════════════════════════════════════════════════
+
+// ── Act 1 objects ─────────────────────────────────────────────────────
+const act1Group = new THREE.Group();
+scene.add(act1Group);
+
+const titleSprite = makeTextSprite("What shape is your time series?", {
+    fontSize: 56, color: SOFT_WHITE_S, scale: 4, width: 1400, height: 120
+});
+act1Group.add(titleSprite);
+
+// Time series lines
+const tsColors = [TEAL, YELLOW_C, CORAL];
+const tsLines = [];
+const N_TS_PTS = 300;
+for (let li = 0; li < 3; li++) {
+    const geom = new THREE.BufferGeometry();
+    const positions = new Float32Array(N_TS_PTS * 3);
+    for (let i = 0; i < N_TS_PTS; i++) {
+        const x = (i / N_TS_PTS) * 7 - 3.5;
+        const freqs = [1.0, 1.6, 2.3];
+        const phases = [0, 0.5, 1.0];
+        const y = Math.sin(freqs[li] * (i / N_TS_PTS) * 10 + phases[li]) * 0.8 + (li - 1) * 0.1;
+        positions[i * 3] = x;
+        positions[i * 3 + 1] = y;
+        positions[i * 3 + 2] = 0;
+    }
+    geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geom.setDrawRange(0, 0);
+    const mat = new THREE.LineBasicMaterial({ color: tsColors[li], transparent: true, opacity: 1 });
+    const line = new THREE.Line(geom, mat);
+    line.visible = false;
+    act1Group.add(line);
+    tsLines.push(line);
+}
+
+// Feature labels
+const featLabels = ["mean", "variance", "spectral power", "entropy"];
+const featSprites = [];
+for (const label of featLabels) {
+    const sp = makeTextSprite(label, { fontSize: 32, color: SOFT_WHITE_S, scale: 1.2, width: 512, height: 64 });
+    act1Group.add(sp);
+    featSprites.push(sp);
+}
+
+// Lissajous attractor
+const N_LISS = 2000;
+const lissGeom = new THREE.BufferGeometry();
+const lissPos = new Float32Array(N_LISS * 3);
+for (let i = 0; i < N_LISS; i++) {
+    const t = (i / N_LISS) * Math.PI * 4;
+    lissPos[i*3]   = Math.sin(t) * 2;
+    lissPos[i*3+1] = Math.sin(1.6 * t + 0.5) * 2;
+    lissPos[i*3+2] = Math.cos(2.3 * t) * 1.5;
+}
+lissGeom.setAttribute('position', new THREE.BufferAttribute(lissPos, 3));
+const lissMat = new THREE.LineBasicMaterial({ color: TEAL, transparent: true, opacity: 0 });
+const lissLine = new THREE.Line(lissGeom, lissMat);
+lissLine.visible = false;
+act1Group.add(lissLine);
+
+// Lissajous trailing particles
+const lissParticleGeom = new THREE.BufferGeometry();
+const lissParticlePos = new Float32Array(N_LISS * 3);
+lissParticleGeom.setAttribute('position', new THREE.BufferAttribute(lissParticlePos, 3));
+const lissParticleMat = new THREE.PointsMaterial({
+    color: TEAL, size: 0.05, sizeAttenuation: true, transparent: true, opacity: 0
+});
+const lissParticles = new THREE.Points(lissParticleGeom, lissParticleMat);
+lissParticles.visible = false;
+act1Group.add(lissParticles);
+
+const attractorLabel = makeTextSprite("attractor", {
+    fontSize: 40, color: CORAL_S, scale: 2, width: 512, height: 80
+});
+attractorLabel.position.set(0, -3, 0);
+act1Group.add(attractorLabel);
+
+// ── Act 2 objects ─────────────────────────────────────────────────────
+const act2Group = new THREE.Group();
+scene.add(act2Group);
+
+// PCA dot grid
+const pcaDots = [];
+const pcaSphereGeom = new THREE.SphereGeometry(0.06, 8, 8);
+for (let r = 0; r < 4; r++) {
+    for (let c = 0; c < 8; c++) {
+        const mat = new THREE.MeshBasicMaterial({ color: SOFT_WHITE, transparent: true, opacity: 0 });
+        const mesh = new THREE.Mesh(pcaSphereGeom, mat);
+        mesh.userData.gridPos = new THREE.Vector3((c - 3.5) * 0.5, (r - 1.5) * 0.5, 0);
+        mesh.userData.cloudPos = new THREE.Vector3(
+            (rng() - 0.5) * 4,
+            (rng() - 0.5) * 3,
+            (rng() - 0.5) * 2
+        );
+        mesh.position.copy(mesh.userData.gridPos);
+        mesh.visible = false;
+        act2Group.add(mesh);
+        pcaDots.push(mesh);
+    }
+}
+
+const pcaLabel = makeTextSprite("PCA(3)", {
+    fontSize: 36, color: TEAL_S, scale: 1.5, width: 256, height: 64
+});
+pcaLabel.position.set(0, 2.5, 0);
+act2Group.add(pcaLabel);
+
+// Delay embedding tube
+const tubeCurve = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(-3, 0, 0),
+    new THREE.Vector3(-1, 1.5, 0.5),
+    new THREE.Vector3(1, -1, -0.5),
+    new THREE.Vector3(3, 0.5, 0.3),
+]);
+const tubeGeom = new THREE.TubeGeometry(tubeCurve, 100, 0.05, 8, false);
+const tubeMat = new THREE.MeshBasicMaterial({ color: TEAL, transparent: true, opacity: 0 });
+const tubeMesh = new THREE.Mesh(tubeGeom, tubeMat);
+tubeMesh.visible = false;
+act2Group.add(tubeMesh);
+
+// Delay embedding highlight spheres
+const delaySpheres = [];
+const delaySphereMat = new THREE.MeshBasicMaterial({ color: CORAL, transparent: true, opacity: 0 });
+for (let i = 0; i < 3; i++) {
+    const s = new THREE.Mesh(new THREE.SphereGeometry(0.1, 12, 12), delaySphereMat.clone());
+    s.visible = false;
+    act2Group.add(s);
+    delaySpheres.push(s);
+}
+
+// Noisy torus point cloud for transition to Act 3
+const N_TORUS = 80;
+const torusPoints = [];
+const torusGeom = new THREE.BufferGeometry();
+const torusPos = new Float32Array(N_TORUS * 3);
+for (let i = 0; i < N_TORUS; i++) {
+    const theta = (i / N_TORUS) * Math.PI * 2;
+    const x = Math.cos(theta) * 2 + (rng() - 0.5) * 0.4;
+    const y = Math.sin(theta) * 2 + (rng() - 0.5) * 0.4;
+    const z = (rng() - 0.5) * 0.3;
+    torusPos[i*3] = x;
+    torusPos[i*3+1] = y;
+    torusPos[i*3+2] = z;
+    torusPoints.push(new THREE.Vector3(x, y, z));
+}
+torusGeom.setAttribute('position', new THREE.BufferAttribute(torusPos, 3));
+const torusPtMat = new THREE.PointsMaterial({
+    color: TEAL, size: 0.08, sizeAttenuation: true, transparent: true, opacity: 0
+});
+const torusPtCloud = new THREE.Points(torusGeom, torusPtMat);
+torusPtCloud.visible = false;
+act2Group.add(torusPtCloud);
+
+// ── Act 3 objects ─────────────────────────────────────────────────────
+const act3Group = new THREE.Group();
+scene.add(act3Group);
+
+// Point spheres (instanced)
+const act3SphereGeom = new THREE.SphereGeometry(0.04, 8, 8);
+const act3SphereMat = new THREE.MeshBasicMaterial({ color: TEAL, transparent: true, opacity: 1 });
+const act3Points = new THREE.InstancedMesh(act3SphereGeom, act3SphereMat, N_TORUS);
+act3Points.visible = false;
+const dummy = new THREE.Object3D();
+for (let i = 0; i < N_TORUS; i++) {
+    dummy.position.copy(torusPoints[i]);
+    dummy.updateMatrix();
+    act3Points.setMatrixAt(i, dummy.matrix);
+}
+act3Points.instanceMatrix.needsUpdate = true;
+act3Group.add(act3Points);
+
+// Growing transparent shells (instanced)
+const shellGeom = new THREE.SphereGeometry(1, 16, 16);
+const shellMat = new THREE.MeshBasicMaterial({
+    color: TEAL, transparent: true, opacity: 0.08, depthWrite: false
+});
+const shells = new THREE.InstancedMesh(shellGeom, shellMat, N_TORUS);
+shells.visible = false;
+act3Group.add(shells);
+
+// Pre-compute distance matrix
+const distMatrix = [];
+for (let i = 0; i < N_TORUS; i++) {
+    distMatrix[i] = [];
+    for (let j = 0; j < N_TORUS; j++) {
+        distMatrix[i][j] = torusPoints[i].distanceTo(torusPoints[j]);
+    }
+}
+
+// Pre-compute edges at radius thresholds
+const RADIUS_STEPS = 50;
+const MAX_RADIUS = 1.2;
+const edgesByRadius = [];
+for (let s = 0; s <= RADIUS_STEPS; s++) {
+    const r = (s / RADIUS_STEPS) * MAX_RADIUS;
+    const edges = [];
+    for (let i = 0; i < N_TORUS; i++) {
+        for (let j = i + 1; j < N_TORUS; j++) {
+            if (distMatrix[i][j] <= r * 2) {
+                edges.push([i, j]);
+            }
+        }
+    }
+    edgesByRadius.push(edges);
+}
+
+// Identify loop edges (consecutive theta ordering)
+const loopEdgeSet = new Set();
+for (let i = 0; i < N_TORUS; i++) {
+    const j = (i + 1) % N_TORUS;
+    const key = Math.min(i, j) + '_' + Math.max(i, j);
+    loopEdgeSet.add(key);
+}
+
+// All possible edges line segments
+const MAX_EDGES = N_TORUS * (N_TORUS - 1) / 2;
+const edgeGeom = new THREE.BufferGeometry();
+const edgePositions = new Float32Array(MAX_EDGES * 6);
+const edgeColors = new Float32Array(MAX_EDGES * 6);
+edgeGeom.setAttribute('position', new THREE.BufferAttribute(edgePositions, 3));
+edgeGeom.setAttribute('color', new THREE.BufferAttribute(edgeColors, 3));
+const edgeLineMat = new THREE.LineBasicMaterial({
+    vertexColors: true, transparent: true, opacity: 0.6
+});
+const edgeLines = new THREE.LineSegments(edgeGeom, edgeLineMat);
+edgeLines.visible = false;
+act3Group.add(edgeLines);
+
+// Loop highlight edges (separate for glow effect)
+const loopEdgeGeom = new THREE.BufferGeometry();
+const loopEdgePos = new Float32Array(N_TORUS * 6);
+loopEdgeGeom.setAttribute('position', new THREE.BufferAttribute(loopEdgePos, 3));
+const loopEdgeMat = new THREE.LineBasicMaterial({
+    color: CORAL, transparent: true, opacity: 0, linewidth: 2
+});
+const loopEdgeLines = new THREE.LineSegments(loopEdgeGeom, loopEdgeMat);
+loopEdgeLines.visible = false;
+act3Group.add(loopEdgeLines);
+
+// Beta counters
+const beta0Canvas = document.createElement('canvas');
+beta0Canvas.width = 256; beta0Canvas.height = 64;
+const beta0Tex = new THREE.CanvasTexture(beta0Canvas);
+beta0Tex.minFilter = THREE.LinearFilter;
+const beta0Sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: beta0Tex, transparent: true, opacity: 0
+}));
+beta0Sprite.scale.set(3, 0.75, 1);
+beta0Sprite.position.set(-4, 3, 0);
+beta0Sprite.visible = false;
+act3Group.add(beta0Sprite);
+
+const beta1Canvas = document.createElement('canvas');
+beta1Canvas.width = 256; beta1Canvas.height = 64;
+const beta1Tex = new THREE.CanvasTexture(beta1Canvas);
+beta1Tex.minFilter = THREE.LinearFilter;
+const beta1Sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: beta1Tex, transparent: true, opacity: 0
+}));
+beta1Sprite.scale.set(3, 0.75, 1);
+beta1Sprite.position.set(-4, 2.3, 0);
+beta1Sprite.visible = false;
+act3Group.add(beta1Sprite);
+
+function updateBetaCounter(canvas, tex, label, value, color) {
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.font = 'bold 36px "Segoe UI", Arial, sans-serif';
+    ctx.fillStyle = color;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(`${label} = ${value}`, 16, 32);
+    tex.needsUpdate = true;
+}
+
+// Act 3 text overlays
+const persistText = makeTextSprite("Persistent = real structure", {
+    fontSize: 40, color: SOFT_WHITE_S, scale: 3, width: 1024, height: 80
+});
+persistText.position.set(0, 1.5, 0);
+act3Group.add(persistText);
+
+const ephemeralText = makeTextSprite("Ephemeral = noise", {
+    fontSize: 36, color: DIM_GRAY_S, scale: 2.5, width: 800, height: 72
+});
+ephemeralText.position.set(0, 0.5, 0);
+act3Group.add(ephemeralText);
+
+// ── Act 4 objects ─────────────────────────────────────────────────────
+const act4Group = new THREE.Group();
+scene.add(act4Group);
+
+// Axes
+const axisLineMat = new THREE.LineBasicMaterial({ color: SOFT_WHITE, transparent: true, opacity: 0 });
+// X-axis
+const xAxisGeom = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(-3, -2.5, 0), new THREE.Vector3(3, -2.5, 0)
+]);
+const xAxis = new THREE.Line(xAxisGeom, axisLineMat.clone());
+xAxis.visible = false;
+act4Group.add(xAxis);
+
+// Y-axis
+const yAxisGeom = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(-3, -2.5, 0), new THREE.Vector3(-3, 3, 0)
+]);
+const yAxis = new THREE.Line(yAxisGeom, axisLineMat.clone());
+yAxis.visible = false;
+act4Group.add(yAxis);
+
+// Diagonal
+const diagGeom = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(-3, -2.5, 0), new THREE.Vector3(3, 3, 0)
+]);
+const diagMat = new THREE.LineDashedMaterial({
+    color: DIM_GRAY, transparent: true, opacity: 0, dashSize: 0.2, gapSize: 0.1
+});
+const diagLine = new THREE.Line(diagGeom, diagMat);
+diagLine.computeLineDistances();
+diagLine.visible = false;
+act4Group.add(diagLine);
+
+// Axis labels
+const birthLabel = makeTextSprite("birth", {
+    fontSize: 32, color: SOFT_WHITE_S, scale: 1.2, width: 256, height: 56
+});
+birthLabel.position.set(0, -3.2, 0);
+act4Group.add(birthLabel);
+
+const deathLabel = makeTextSprite("death", {
+    fontSize: 32, color: SOFT_WHITE_S, scale: 1.2, width: 256, height: 56
+});
+deathLabel.position.set(-3.8, 0.5, 0);
+act4Group.add(deathLabel);
+
+// Persistence diagram dots
+const pdDots = [];
+const pdPositions = [
+    // H0 near-diagonal (short-lived)
+    { birth: 0.1, death: 0.25, color: TEAL, size: 0.08 },
+    { birth: 0.15, death: 0.35, color: TEAL, size: 0.08 },
+    { birth: 0.2, death: 0.3, color: TEAL, size: 0.08 },
+    { birth: 0.05, death: 0.2, color: TEAL, size: 0.08 },
+    { birth: 0.25, death: 0.4, color: TEAL, size: 0.08 },
+    { birth: 0.3, death: 0.45, color: TEAL, size: 0.08 },
+    // H1 near-diagonal (short-lived)
+    { birth: 0.4, death: 0.55, color: DIM_GRAY, size: 0.06 },
+    { birth: 0.35, death: 0.5, color: DIM_GRAY, size: 0.06 },
+    // THE persistent H1 feature
+    { birth: 0.3, death: 0.9, color: CORAL, size: 0.15 },
+];
+
+for (const pd of pdPositions) {
+    const g = new THREE.SphereGeometry(pd.size, 12, 12);
+    const m = new THREE.MeshBasicMaterial({ color: pd.color, transparent: true, opacity: 0 });
+    const mesh = new THREE.Mesh(g, m);
+    // Map birth/death to screen coords
+    const x = -3 + pd.birth * 6;
+    const y = -2.5 + pd.death * 5.5;
+    mesh.userData.targetPos = new THREE.Vector3(x, y, 0);
+    mesh.userData.startPos = new THREE.Vector3(-5, y, 0);
+    mesh.position.copy(mesh.userData.startPos);
+    mesh.visible = false;
+    act4Group.add(mesh);
+    pdDots.push(mesh);
+}
+
+// Feature labels for diagram
+const featureNames = [
+    { text: "\u03B20 (components)", pos: [2.5, -1.5, 0] },
+    { text: "\u03B21 (loops)", pos: [2.5, -0.5, 0] },
+    { text: "persistence entropy", pos: [2.5, 0.5, 0] },
+    { text: "max persistence", pos: [2.5, 1.2, 0] },
+    { text: "total persistence", pos: [2.5, 1.9, 0] },
+];
+const featDiagSprites = [];
+for (const fn of featureNames) {
+    const sp = makeTextSprite(fn.text, {
+        fontSize: 26, color: SOFT_WHITE_S, scale: 1.5, width: 512, height: 48
+    });
+    sp.position.set(fn.pos[0], fn.pos[1], fn.pos[2]);
+    act4Group.add(sp);
+    featDiagSprites.push(sp);
+}
+
+// Code block sprite for Act 4
+const codeSprite4 = makeCodeSprite([
+    [
+        { text: 'from ', color: '#569cd6' },
+        { text: 'topofeatures ', color: SOFT_WHITE_S },
+        { text: 'import ', color: '#569cd6' },
+        { text: 'extract', color: '#dcdcaa' },
+    ],
+    [
+        { text: 'features ', color: '#9cdcfe' },
+        { text: '= ', color: SOFT_WHITE_S },
+        { text: 'extract', color: '#dcdcaa' },
+        { text: '(X)', color: SOFT_WHITE_S },
+    ],
+], { scale: 3 });
+codeSprite4.position.set(2, 0, 0);
+act4Group.add(codeSprite4);
+
+// ── Act 5 objects ─────────────────────────────────────────────────────
+const act5Group = new THREE.Group();
+scene.add(act5Group);
+
+const resultRows = [
+    { domain: "Oscillator synchronization", rho: "\u03C1 = 0.88" },
+    { domain: "Neural network memory", rho: "\u03C1 = 0.83" },
+    { domain: "Power grid stability", rho: "\u03C1 = 0.69" },
+    { domain: "Real EEG sleep depth", rho: "\u03C1 = 0.83" },
+];
+const resultSprites = [];
+for (let i = 0; i < resultRows.length; i++) {
+    const row = resultRows[i];
+    const canvas = document.createElement('canvas');
+    canvas.width = 1200; canvas.height = 64;
+    const ctx = canvas.getContext('2d');
+    ctx.font = '32px "Segoe UI", Arial, sans-serif';
+    ctx.fillStyle = SOFT_WHITE_S;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(row.domain, 40, 32);
+    ctx.fillStyle = YELLOW_S;
+    ctx.textAlign = 'right';
+    ctx.fillText(row.rho, 1160, 32);
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.minFilter = THREE.LinearFilter;
+    const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: 0 });
+    const sp = new THREE.Sprite(mat);
+    sp.scale.set(8, 0.45, 1);
+    sp.position.set(0, 1.5 - i * 1.0, -i * 0.05);
+    sp.visible = false;
+    act5Group.add(sp);
+    resultSprites.push(sp);
+}
+
+const summaryText = makeTextSprite("18/20 dynamical systems\nFrom 6% of observed variables\nOn real data", {
+    fontSize: 42, color: SOFT_WHITE_S, scale: 5, width: 1024, height: 256,
+    multiline: true, lineHeight: 1.5
+});
+summaryText.position.set(0, 0, 0);
+act5Group.add(summaryText);
+
+// ── Act 6 objects ─────────────────────────────────────────────────────
+const act6Group = new THREE.Group();
+scene.add(act6Group);
+
+const leftCode = makeCodeSprite([
+    [
+        { text: 'from ', color: '#569cd6' },
+        { text: 'topofeatures ', color: SOFT_WHITE_S },
+        { text: 'import ', color: '#569cd6' },
+        { text: 'extract', color: '#dcdcaa' },
+    ],
+    [
+        { text: 'features ', color: '#9cdcfe' },
+        { text: '= ', color: SOFT_WHITE_S },
+        { text: 'extract', color: '#dcdcaa' },
+        { text: '(X)', color: SOFT_WHITE_S },
+    ],
+], { scale: 2.8 });
+leftCode.position.set(-3, 0.5, 0);
+act6Group.add(leftCode);
+
+const rightCode = makeCodeSprite([
+    [
+        { text: '# with tsfresh', color: '#6a9955' },
+    ],
+    [
+        { text: 'settings', color: '#9cdcfe' },
+        { text: '.update', color: '#dcdcaa' },
+        { text: '(TOPO_SETTINGS)', color: SOFT_WHITE_S },
+    ],
+], { scale: 2.8 });
+rightCode.position.set(3, 0.5, 0);
+act6Group.add(rightCode);
+
+const pipSprite = makeTextSprite("pip install topo-features", {
+    fontSize: 52, color: TEAL_S, scale: 4, width: 1200, height: 100, bold: true
+});
+pipSprite.position.set(0, 0, 0);
+act6Group.add(pipSprite);
+
+const repoSprite = makeTextSprite("github.com/musicofhel/topo-features", {
+    fontSize: 28, color: DIM_GRAY_S, scale: 3, width: 1024, height: 56
+});
+repoSprite.position.set(0, -1.2, 0);
+act6Group.add(repoSprite);
+
+// ══════════════════════════════════════════════════════════════════════
+// MASTER UPDATE FUNCTION
+// ══════════════════════════════════════════════════════════════════════
+
+function hideAll() {
+    [act1Group, act2Group, act3Group, act4Group, act5Group, act6Group].forEach(g => {
+        g.traverse(c => {
+            if (c.isMesh || c.isLine || c.isPoints || c.isSprite) {
+                c.visible = false;
+                if (c.material) c.material.opacity = 0;
+            }
+        });
+    });
+}
+
+function fadeObj(obj, targetOpacity, frame, startFrame, endFrame) {
+    if (frame < startFrame) return;
+    const t = ease(fp(frame, startFrame, endFrame));
+    obj.visible = true;
+    obj.material.opacity = lerp(0, targetOpacity, t);
+}
+
+function fadeObjOut(obj, frame, startFrame, endFrame) {
+    if (frame < startFrame) { obj.visible = true; return; }
+    if (frame > endFrame) { obj.visible = false; obj.material.opacity = 0; return; }
+    const t = ease(fp(frame, startFrame, endFrame));
+    obj.visible = true;
+    obj.material.opacity = lerp(obj.material.opacity || 1, 0, t);
+}
+
+function updateScene(frame) {
+    hideAll();
+
+    if (frame <= 2099) updateAct1(frame);
+    else if (frame <= 3899) updateAct2(frame);
+    else if (frame <= 6899) updateAct3(frame);
+    else if (frame <= 8699) updateAct4(frame);
+    else if (frame <= 10079) updateAct5(frame);
+    else updateAct6(frame);
+
+    updateCamera(frame);
+}
+
+// ── Act 1 ─────────────────────────────────────────────────────────────
+function updateAct1(frame) {
+    // Title: fade in 0-120, hold 120-240
+    if (frame <= 240) {
+        titleSprite.visible = true;
+        if (frame < 120) {
+            titleSprite.material.opacity = ease(fp(frame, 0, 120));
+        } else {
+            titleSprite.material.opacity = 1;
+        }
+    }
+
+    // Time series: draw on 240-900
+    if (frame >= 240 && frame <= 1500) {
+        for (let li = 0; li < 3; li++) {
+            tsLines[li].visible = true;
+            const drawProgress = Math.min(1, ease(fp(frame, 240, 660)));
+            const count = Math.floor(drawProgress * N_TS_PTS);
+            tsLines[li].geometry.setDrawRange(0, count);
+            tsLines[li].material.opacity = frame >= 900 ? lerp(1, 0, ease(fp(frame, 900, 1200))) : 1;
+        }
+
+        // Feature labels: stagger in 420-660
+        for (let i = 0; i < featSprites.length; i++) {
+            const start = 420 + i * 60;
+            if (frame >= start) {
+                featSprites[i].visible = true;
+                featSprites[i].material.opacity = Math.min(1, ease(fp(frame, start, start + 60)));
+                featSprites[i].position.set(3, 1 - i * 0.6, 0);
+                if (frame >= 900) {
+                    featSprites[i].material.opacity = lerp(1, 0, ease(fp(frame, 900, 1100)));
+                }
+            }
+        }
+    }
+
+    // Lissajous: fade in 900-1500
+    if (frame >= 900) {
+        lissLine.visible = true;
+        lissMat.opacity = ease(fp(frame, 900, 1200));
+        lissParticles.visible = true;
+        lissParticleMat.opacity = ease(fp(frame, 900, 1200)) * 0.6;
+
+        // Animate particles along the curve
+        const particlePhase = frame * 0.002;
+        const pPos = lissParticles.geometry.attributes.position.array;
+        for (let i = 0; i < N_LISS; i++) {
+            const t = ((i / N_LISS) + particlePhase) % 1.0 * Math.PI * 4;
+            pPos[i*3]   = Math.sin(t) * 2;
+            pPos[i*3+1] = Math.sin(1.6 * t + 0.5) * 2;
+            pPos[i*3+2] = Math.cos(2.3 * t) * 1.5;
+        }
+        lissParticles.geometry.attributes.position.needsUpdate = true;
+
+        // Attractor label
+        if (frame >= 1500) {
+            attractorLabel.visible = true;
+            attractorLabel.material.opacity = ease(fp(frame, 1500, 1620));
+        }
+
+        // Fade out at end of act
+        if (frame >= 2040) {
+            const fo = 1 - ease(fp(frame, 2040, 2099));
+            lissMat.opacity *= fo;
+            lissParticleMat.opacity *= fo;
+            if (attractorLabel.visible) attractorLabel.material.opacity *= fo;
+        }
+    }
+}
+
+// ── Act 2 ─────────────────────────────────────────────────────────────
+function updateAct2(frame) {
+    // PCA grid → cloud 2100-2760
+    if (frame >= 2100 && frame <= 3480) {
+        const gridToCloud = ease(fp(frame, 2100, 2760));
+        for (const dot of pcaDots) {
+            dot.visible = true;
+            dot.material.opacity = 1;
+            const gp = dot.userData.gridPos;
+            const cp = dot.userData.cloudPos;
+            dot.position.lerpVectors(gp, cp, gridToCloud);
+        }
+        pcaLabel.visible = true;
+        pcaLabel.material.opacity = gridToCloud > 0.3 ? 1 : ease(fp(frame, 2100, 2300));
+
+        // Fade out PCA dots
+        if (frame >= 2760) {
+            const fo = 1 - ease(fp(frame, 2760, 2960));
+            for (const dot of pcaDots) dot.material.opacity = fo;
+            pcaLabel.material.opacity = fo;
+        }
+    }
+
+    // Delay embedding 2760-3480
+    if (frame >= 2760 && frame <= 3480) {
+        tubeMesh.visible = true;
+        tubeMat.opacity = ease(fp(frame, 2760, 2880));
+
+        // Highlight spheres slide along tube
+        const phase = ((frame - 2760) / 720) * 0.6;
+        for (let i = 0; i < 3; i++) {
+            const t = Math.min(1, phase + i * 0.15);
+            const pt = tubeCurve.getPointAt(t);
+            delaySpheres[i].visible = true;
+            delaySpheres[i].material.opacity = ease(fp(frame, 2760 + i * 60, 2760 + i * 60 + 120));
+            delaySpheres[i].position.copy(pt);
+        }
+
+        // Fade out tube
+        if (frame >= 3300) {
+            const fo = 1 - ease(fp(frame, 3300, 3480));
+            tubeMat.opacity *= fo;
+            for (const s of delaySpheres) s.material.opacity *= fo;
+        }
+    }
+
+    // Torus point cloud 3480-3899
+    if (frame >= 3300) {
+        torusPtCloud.visible = true;
+        torusPtMat.opacity = ease(fp(frame, 3300, 3600));
+
+        // Fade out at end of act
+        if (frame >= 3840) {
+            // Don't fade — carry into Act 3
+        }
+    }
+}
+
+// ── Act 3 ─────────────────────────────────────────────────────────────
+function updateAct3(frame) {
+    // Show point cloud
+    act3Points.visible = true;
+    act3SphereMat.opacity = 1;
+
+    // Radius grows from 0.05 to MAX_RADIUS
+    const growStart = 3900;
+    const growEnd = 6420;
+    let radius;
+    if (frame <= growEnd) {
+        radius = lerp(0.05, MAX_RADIUS, ease(fp(frame, growStart, growEnd)));
+    } else {
+        radius = MAX_RADIUS;
+    }
+
+    // Update shells
+    shells.visible = true;
+    shellMat.opacity = 0.06;
+    for (let i = 0; i < N_TORUS; i++) {
+        dummy.position.copy(torusPoints[i]);
+        dummy.scale.setScalar(radius);
+        dummy.updateMatrix();
+        shells.setMatrixAt(i, dummy.matrix);
+    }
+    shells.instanceMatrix.needsUpdate = true;
+
+    // Edges
+    const radiusStep = Math.min(RADIUS_STEPS, Math.floor((radius / MAX_RADIUS) * RADIUS_STEPS));
+    const edges = edgesByRadius[radiusStep];
+    const ePos = edgeLines.geometry.attributes.position.array;
+    const eCol = edgeLines.geometry.attributes.color.array;
+
+    // Determine loop formation
+    const loopRadius = 0.55;
+    const loopFormed = radius >= loopRadius;
+    const loopFilled = radius >= 0.85;
+
+    let edgeCount = 0;
+    for (let e = 0; e < edges.length && edgeCount < MAX_EDGES; e++) {
+        const [i, j] = edges[e];
+        const key = Math.min(i, j) + '_' + Math.max(i, j);
+        const isLoopEdge = loopEdgeSet.has(key);
+
+        ePos[edgeCount * 6]     = torusPoints[i].x;
+        ePos[edgeCount * 6 + 1] = torusPoints[i].y;
+        ePos[edgeCount * 6 + 2] = torusPoints[i].z;
+        ePos[edgeCount * 6 + 3] = torusPoints[j].x;
+        ePos[edgeCount * 6 + 4] = torusPoints[j].y;
+        ePos[edgeCount * 6 + 5] = torusPoints[j].z;
+
+        let r, g, b;
+        if (isLoopEdge && loopFormed && !loopFilled) {
+            // Coral pulsing
+            const pulse = 0.7 + 0.3 * Math.sin(frame * 0.05);
+            r = 1.0 * pulse;
+            g = 0.42 * pulse;
+            b = 0.42 * pulse;
+        } else if (isLoopEdge && loopFilled) {
+            r = 0.4; g = 0.4; b = 0.4;
+        } else {
+            r = 0.35; g = 0.77; b = 0.87;
+        }
+
+        eCol[edgeCount * 6]     = r;
+        eCol[edgeCount * 6 + 1] = g;
+        eCol[edgeCount * 6 + 2] = b;
+        eCol[edgeCount * 6 + 3] = r;
+        eCol[edgeCount * 6 + 4] = g;
+        eCol[edgeCount * 6 + 5] = b;
+
+        edgeCount++;
+    }
+
+    // Zero out remaining edges
+    for (let e = edgeCount; e < MAX_EDGES; e++) {
+        for (let k = 0; k < 6; k++) {
+            ePos[e * 6 + k] = 0;
+            eCol[e * 6 + k] = 0;
+        }
+    }
+
+    edgeLines.visible = true;
+    edgeLines.geometry.attributes.position.needsUpdate = true;
+    edgeLines.geometry.attributes.color.needsUpdate = true;
+    edgeLines.geometry.setDrawRange(0, edgeCount * 2);
+
+    // Loop highlight (separate bright lines during the loop moment)
+    if (loopFormed && !loopFilled) {
+        loopEdgeLines.visible = true;
+        const pulse = 0.7 + 0.3 * Math.sin(frame * 0.05);
+        loopEdgeMat.opacity = pulse;
+        let lIdx = 0;
+        const lPos = loopEdgeLines.geometry.attributes.position.array;
+        for (let i = 0; i < N_TORUS; i++) {
+            const j = (i + 1) % N_TORUS;
+            if (distMatrix[i][j] <= radius * 2) {
+                lPos[lIdx * 6]     = torusPoints[i].x;
+                lPos[lIdx * 6 + 1] = torusPoints[i].y;
+                lPos[lIdx * 6 + 2] = torusPoints[i].z;
+                lPos[lIdx * 6 + 3] = torusPoints[j].x;
+                lPos[lIdx * 6 + 4] = torusPoints[j].y;
+                lPos[lIdx * 6 + 5] = torusPoints[j].z;
+                lIdx++;
+            }
+        }
+        for (let e = lIdx; e < N_TORUS; e++) {
+            for (let k = 0; k < 6; k++) lPos[e * 6 + k] = 0;
+        }
+        loopEdgeLines.geometry.attributes.position.needsUpdate = true;
+        loopEdgeLines.geometry.setDrawRange(0, lIdx * 2);
+    }
+
+    // Beta counters
+    // Count connected components (simple approximation)
+    const beta0Val = Math.max(1, Math.round(N_TORUS * (1 - ease(fp(frame, 3900, 5880)))));
+    const beta1Val = (loopFormed && !loopFilled) ? 1 : 0;
+
+    beta0Sprite.visible = true;
+    beta0Sprite.material.opacity = ease(fp(frame, 3900, 4020));
+    updateBetaCounter(beta0Canvas, beta0Tex, '\u03B2\u2080', beta0Val, TEAL_S);
+
+    beta1Sprite.visible = true;
+    beta1Sprite.material.opacity = ease(fp(frame, 4800, 4920));
+    updateBetaCounter(beta1Canvas, beta1Tex, '\u03B2\u2081', beta1Val, CORAL_S);
+
+    // Camera orbit during the loop moment (frames 4920-5880)
+    if (frame >= 4920 && frame <= 5880) {
+        const angle = lerp(0, Math.PI, ease(fp(frame, 4920, 5880)));
+        const camR = 7;
+        camera.position.set(Math.sin(angle) * camR, 0.5, Math.cos(angle) * camR);
+        camera.lookAt(0, 0, 0);
+    }
+
+    // Text overlays at end of act
+    if (frame >= 6420) {
+        persistText.visible = true;
+        persistText.material.opacity = ease(fp(frame, 6420, 6540));
+        ephemeralText.visible = true;
+        ephemeralText.material.opacity = ease(fp(frame, 6480, 6600));
+
+        // Dim point cloud
+        act3SphereMat.opacity = 0.3;
+        edgeLineMat.opacity = 0.2;
+        shellMat.opacity = 0.02;
+    }
+
+    // Fade out at end
+    if (frame >= 6840) {
+        const fo = 1 - ease(fp(frame, 6840, 6899));
+        act3SphereMat.opacity *= fo;
+        edgeLineMat.opacity *= fo;
+        shellMat.opacity *= fo;
+        beta0Sprite.material.opacity *= fo;
+        beta1Sprite.material.opacity *= fo;
+        if (persistText.visible) persistText.material.opacity *= fo;
+        if (ephemeralText.visible) ephemeralText.material.opacity *= fo;
+        if (loopEdgeLines.visible) loopEdgeMat.opacity *= fo;
+    }
+}
+
+// ── Act 4 ─────────────────────────────────────────────────────────────
+function updateAct4(frame) {
+    // Axes fade in 6900-7080
+    xAxis.visible = true;
+    xAxis.material.opacity = ease(fp(frame, 6900, 7080));
+    yAxis.visible = true;
+    yAxis.material.opacity = ease(fp(frame, 6900, 7080));
+    diagLine.visible = true;
+    diagMat.opacity = ease(fp(frame, 6900, 7080)) * 0.5;
+    birthLabel.visible = true;
+    birthLabel.material.opacity = ease(fp(frame, 6900, 7080));
+    deathLabel.visible = true;
+    deathLabel.material.opacity = ease(fp(frame, 6900, 7080));
+
+    // Dots fly in 7080-7680
+    for (let i = 0; i < pdDots.length; i++) {
+        const dot = pdDots[i];
+        const startF = 7080 + i * 60;
+        const endF = startF + 180;
+        if (frame >= startF) {
+            dot.visible = true;
+            const t = ease(fp(frame, startF, endF));
+            dot.material.opacity = t;
+            dot.position.lerpVectors(dot.userData.startPos, dot.userData.targetPos, t);
+
+            // The persistent H1 dot (last one) pulses
+            if (i === pdDots.length - 1 && t >= 1) {
+                const pulse = 0.7 + 0.3 * Math.sin(frame * 0.08);
+                dot.material.opacity = pulse;
+            }
+        }
+    }
+
+    // Feature labels 7680-8280
+    for (let i = 0; i < featDiagSprites.length; i++) {
+        const sp = featDiagSprites[i];
+        const startF = 7680 + i * 100;
+        const peakF = startF + 120;
+        if (frame >= startF) {
+            sp.visible = true;
+            const t = ease(fp(frame, startF, peakF));
+            // Each label fades after the next appears
+            const nextStart = startF + 100;
+            if (frame >= nextStart + 120 && i < featDiagSprites.length - 1) {
+                sp.material.opacity = 0.3;
+            } else {
+                sp.material.opacity = t;
+            }
+        }
+    }
+
+    // Code block and diagram split 8280-8699
+    if (frame >= 8280) {
+        // Slide diagram left
+        const slideT = ease(fp(frame, 8280, 8460));
+        act4Group.position.x = lerp(0, -2, slideT);
+
+        codeSprite4.visible = true;
+        codeSprite4.material.opacity = ease(fp(frame, 8340, 8520));
+        codeSprite4.position.set(4.5, 0, 0);
+    } else {
+        act4Group.position.x = 0;
+    }
+
+    // Fade out
+    if (frame >= 8640) {
+        const fo = 1 - ease(fp(frame, 8640, 8699));
+        act4Group.traverse(c => {
+            if (c.material) c.material.opacity *= fo;
+        });
+    }
+}
+
+// ── Act 5 ─────────────────────────────────────────────────────────────
+function updateAct5(frame) {
+    // Result rows 8700-9060
+    if (frame <= 9060) {
+        for (let i = 0; i < resultSprites.length; i++) {
+            const sp = resultSprites[i];
+            sp.visible = true;
+            sp.material.opacity = ease(fp(frame, 8700, 8880));
+        }
+    }
+
+    // Fly away and show summary 9060-9660
+    if (frame >= 9060 && frame <= 9660) {
+        const flyT = ease(fp(frame, 9060, 9300));
+        for (let i = 0; i < resultSprites.length; i++) {
+            const sp = resultSprites[i];
+            sp.visible = true;
+            sp.position.y = (1.5 - i * 1.0) + flyT * 8;
+            sp.material.opacity = 1 - flyT;
+        }
+
+        summaryText.visible = true;
+        summaryText.material.opacity = ease(fp(frame, 9180, 9420));
+    }
+
+    if (frame > 9660) {
+        summaryText.visible = true;
+        summaryText.material.opacity = 1;
+    }
+
+    // Fade out
+    if (frame >= 10020) {
+        const fo = 1 - ease(fp(frame, 10020, 10079));
+        act5Group.traverse(c => {
+            if (c.material) c.material.opacity *= fo;
+        });
+    }
+}
+
+// ── Act 6 ─────────────────────────────────────────────────────────────
+function updateAct6(frame) {
+    // Code panels slide in 10080-10440
+    leftCode.visible = true;
+    leftCode.material.opacity = ease(fp(frame, 10080, 10260));
+    leftCode.position.x = lerp(-8, -3, ease(fp(frame, 10080, 10260)));
+
+    rightCode.visible = true;
+    rightCode.material.opacity = ease(fp(frame, 10080, 10260));
+    rightCode.position.x = lerp(8, 3, ease(fp(frame, 10080, 10260)));
+
+    // Code slides up, pip appears 10440-10620
+    if (frame >= 10440) {
+        const slideUp = ease(fp(frame, 10440, 10560));
+        leftCode.position.y = lerp(0.5, 4, slideUp);
+        leftCode.material.opacity = 1 - slideUp;
+        rightCode.position.y = lerp(0.5, 4, slideUp);
+        rightCode.material.opacity = 1 - slideUp;
+
+        pipSprite.visible = true;
+        pipSprite.material.opacity = ease(fp(frame, 10500, 10620));
+    }
+
+    // Repo URL 10620-10799
+    if (frame >= 10620) {
+        repoSprite.visible = true;
+        repoSprite.material.opacity = ease(fp(frame, 10620, 10740));
+    }
+
+    // Final fade 10770-10799
+    if (frame >= 10770) {
+        const fo = 1 - ease(fp(frame, 10770, 10799));
+        act6Group.traverse(c => {
+            if (c.material) c.material.opacity *= fo;
+        });
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// PUBLIC API (called by Playwright)
+// ══════════════════════════════════════════════════════════════════════
+window.TOTAL_FRAMES = TOTAL_FRAMES;
+window.FPS = FPS;
+
+window.renderFrame = function(frameNumber) {
+    updateScene(frameNumber);
+    renderer.render(scene, camera);
+};
+
+window.getResolution = function() {
+    return { width: WIDTH, height: HEIGHT };
+};
+
+// Render frame 0 on load so Playwright can detect initialization
+window.renderFrame(0);
+</script>
+</body>
+</html>

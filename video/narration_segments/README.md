@@ -34,10 +34,10 @@ ffmpeg -i act1.mp3 -i act2.mp3 -i act3.mp3 -i act4.mp3 -i act5.mp3 -i act6.mp3 \
 
 ## Combine with video
 ```bash
-manim render -qh video/explainer.py TopoFeaturesExplainer
+python video/render.py
 
-ffmpeg -i media/videos/explainer/1080p60/TopoFeaturesExplainer.mp4 \
+ffmpeg -i video/output/topofeatures_silent.mp4 \
   -i narration_full.mp3 \
   -c:v copy -c:a aac -shortest \
-  topofeatures_explainer.mp4
+  video/output/topofeatures_explainer.mp4
 ```
