@@ -1,0 +1,5 @@
+We record this in a persistence diagram. Birth on the x-axis, death on the y-axis. Points near the diagonal — noise. Points far from it — real structure.
+
+From this diagram, five numbers. Beta-zero and beta-one. Persistence entropy. Max persistence. Total persistence.
+
+Five numbers. One function call.

@@ -1,0 +1,9 @@
+Here's the key idea. Put a tiny ball around each point. Now grow them.
+
+At first, nothing connects. Many isolated clusters. We count those — that's beta-zero.
+
+Keep growing. A ring of points connects into a loop — with empty space inside. Beta-one just ticked to one. A topological feature is born.
+
+Grow further. The loop fills in and dies. It was born at one scale and died at another. The lifetime is the difference.
+
+Long-lived features are real structure. Short-lived features are noise. That's the core insight — persistence separates signal from accident.

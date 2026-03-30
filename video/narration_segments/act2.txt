@@ -1,0 +1,7 @@
+How do we get at the shape?
+
+If you have multiple sensors, project down to three dimensions with PCA. You get a point cloud.
+
+If you have one sensor, use delay embedding — take the value now, ten steps ago, twenty steps ago. Each triple is a point. Stack them up and you reconstruct the attractor from a single channel.
+
+Either way: a point cloud with a shape we can measure.

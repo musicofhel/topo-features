@@ -1,0 +1,5 @@
+These five numbers predict system properties across eighteen out of twenty systems we tested.
+
+Synchronization in oscillators. Memory capacity in neural networks. Stability in power grids. Sleep depth in real EEG.
+
+No domain knowledge. No model assumptions. Just the geometry of the trajectory.

@@ -12,3 +12,4 @@ venv/
 *.so
 .coverage
 htmlcov/
+media/

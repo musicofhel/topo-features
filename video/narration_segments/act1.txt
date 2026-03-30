@@ -1,0 +1,7 @@
+What shape is your time series?
+
+You have sensor data. You extract features — mean, variance, spectral power, entropy. These capture statistics. But they miss something.
+
+Your data came from a dynamical system. And that system has geometry. Its trajectory through state space forms a shape — loops, spirals, folds.
+
+That shape is called an attractor. Its structure tells you things about the system that no statistic will reveal.
