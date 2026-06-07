@@ -42,11 +42,9 @@ try:
             # Takens embedding for univariate input
             n_embed = len(x) - (dimension - 1) * delay
             if n_embed < 50:
-                # Too short for meaningful topology
-                for name in [
-                    "betti_0", "betti_1", "persistence_entropy",
-                    "max_H1_persistence", "total_H1_persistence",
-                ]:
+                # Too short for meaningful topology — return zeros for all features
+                from topofeatures.core import FEATURE_NAMES
+                for name in FEATURE_NAMES:
                     results.append(
                         (f"delay_{delay}__dim_{dimension}__{name}", 0.0)
                     )

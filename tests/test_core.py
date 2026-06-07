@@ -24,7 +24,7 @@ def sine_1d():
 
 
 class TestExtract:
-    def test_returns_dict_with_5_keys(self, sine_3d):
+    def test_returns_dict_with_expected_keys(self, sine_3d):
         result = extract(sine_3d)
         assert isinstance(result, dict)
         assert set(result.keys()) == set(FEATURE_NAMES)
@@ -89,16 +89,19 @@ class TestExtractMany:
 
 class TestExtractWindows:
     def test_returns_correct_shape(self, sine_3d):
-        features, names = extract_windows(sine_3d, window_size=500, step_size=250)
+        features, names, drift = extract_windows(sine_3d, window_size=500, step_size=250)
         expected_windows = (2000 - 500) // 250 + 1
-        assert features.shape == (expected_windows, 5)
-        assert len(names) == 5
+        assert features.shape == (expected_windows, len(FEATURE_NAMES))
+        assert len(names) == len(FEATURE_NAMES)
+        assert isinstance(drift, float)
+        assert drift >= 0.0
 
     def test_feature_names_match(self, sine_3d):
-        _, names = extract_windows(sine_3d, window_size=500, step_size=500)
+        _, names, _ = extract_windows(sine_3d, window_size=500, step_size=500)
         assert names == FEATURE_NAMES
 
     def test_1d_windows(self, sine_1d):
-        features, _ = extract_windows(sine_1d, window_size=500, step_size=500)
-        assert features.shape[1] == 5
+        features, _, drift = extract_windows(sine_1d, window_size=500, step_size=500)
+        assert features.shape[1] == len(FEATURE_NAMES)
         assert features.shape[0] >= 1
+        assert np.isfinite(drift)

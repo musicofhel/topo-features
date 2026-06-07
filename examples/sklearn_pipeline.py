@@ -46,7 +46,7 @@ def main():
             traj = rossler(a=a, b=0.2, c=5.7, n_steps=8000, seed=seed)
             # Discard transient
             traj = traj[2000:]
-            feats, names = extract_windows(traj, window_size=1000, step_size=500)
+            feats, names, _ = extract_windows(traj, window_size=1000, step_size=500)
             all_features.append(feats)
             all_labels.extend([0] * len(feats))  # 0 = periodic
 
@@ -54,7 +54,7 @@ def main():
         for seed in range(3):
             traj = rossler(a=a, b=0.2, c=5.7, n_steps=8000, seed=seed)
             traj = traj[2000:]
-            feats, names = extract_windows(traj, window_size=1000, step_size=500)
+            feats, names, _ = extract_windows(traj, window_size=1000, step_size=500)
             all_features.append(feats)
             all_labels.extend([1] * len(feats))  # 1 = chaotic
 

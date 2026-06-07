@@ -79,4 +79,24 @@ def extract_features(diagrams: list[np.ndarray]) -> dict:
         features["max_H1_persistence"] = 0.0
         features["persistence_entropy"] = 0.0
 
+    # Birth-death slope: OLS regression of death vs birth in H1
+    # Periodic orbits produce slope near 1; chaotic attractors < 1
+    if len(dgm1) > 0:
+        lifetimes1_all = dgm1[:, 1] - dgm1[:, 0]
+        valid = np.isfinite(lifetimes1_all) & (lifetimes1_all > 1e-10)
+        births = dgm1[valid, 0]
+        deaths = dgm1[valid, 1]
+        if len(births) >= 2:
+            var_b = np.var(births)
+            if var_b > 1e-15:
+                features["birth_death_slope"] = float(
+                    np.cov(births, deaths)[0, 1] / var_b
+                )
+            else:
+                features["birth_death_slope"] = 0.0
+        else:
+            features["birth_death_slope"] = 0.0
+    else:
+        features["birth_death_slope"] = 0.0
+
     return features
